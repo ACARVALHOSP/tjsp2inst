@@ -1,7 +1,6 @@
 import time
 import re
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Optional
 
 import httpx
@@ -12,7 +11,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
     "Accept-Language": "pt-BR,pt;q=0.9",
 }
-DELAY = 1.5  # segundos entre requisições
+DELAY = 1.5
 
 
 @dataclass
@@ -40,19 +39,33 @@ class ResultadoBusca:
 class CJSGClient:
     def __init__(self):
         self._client = httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30)
-        self._sessao_aberta = False
+        self._form_base: dict = {}
 
     def _abrir_sessao(self):
-        """Abre sessão no CJSG e obtém o cookie necessário."""
-        self._client.get(f"{BASE_URL}/resultadoCompleta.do")
-        self._sessao_aberta = True
+        """Abre sessão e lê todos os campos do formulário, incluindo hidden fields."""
+        r = self._client.get(f"{BASE_URL}/resultadoCompleta.do")
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # coleta todos os campos do form (hidden fields incluídos)
+        form = soup.find("form")
+        self._form_base = {}
+        if form:
+            for inp in form.find_all(["input", "select", "textarea"]):
+                name = inp.get("name")
+                if not name:
+                    continue
+                value = inp.get("value", "")
+                self._form_base[name] = value
+
         time.sleep(DELAY)
 
     def _n_total(self, soup: BeautifulSoup) -> int:
         el = soup.select_one("#nomeAba-A")
         if not el:
             return 0
-        return int(re.sub(r"[^0-9]", "", el.text) or "0")
+        texto = re.sub(r"[^0-9]", "", el.text)
+        return int(texto) if texto else 0
 
     def _parse_pagina(self, html: str) -> list[Acordao]:
         soup = BeautifulSoup(html, "html.parser")
@@ -116,27 +129,24 @@ class CJSGClient:
         pagina: int = 1,
     ) -> ResultadoBusca:
         """
-        Busca acórdãos no CJSG.
-
-        Datas no formato DD/MM/YYYY.
-        Retorna metadados + texto da ementa de cada acórdão.
+        Busca acórdãos no CJSG. Datas no formato YYYY-MM-DD.
         """
-        if not self._sessao_aberta:
+        if not self._form_base:
             self._abrir_sessao()
 
-        # primeira página: submete o formulário
         if pagina == 1:
-            dados = {
-                "dados.buscaInteiroTeor": livre,
-                "dados.dtJulgamentoInicio": _fmt_data(data_ini_julg) or "",
-                "dados.dtJulgamentoFim": _fmt_data(data_fim_julg) or "",
-                "dados.dtRegistroInicio": _fmt_data(data_ini_reg) or "",
-                "dados.dtRegistroFim": _fmt_data(data_fim_reg) or "",
-                "secoesTreeSelection.values": secoes,
-                "classesTreeSelection.values": classes,
-                "assuntosTreeSelection.values": assuntos,
-                "dados.pesquisarComSinonimos": "true",
-            }
+            # parte do form completo (com hidden fields) e sobrescreve só o que precisamos
+            dados = dict(self._form_base)
+            dados["dados.buscaInteiroTeor"] = livre
+            dados["dados.dtJulgamentoInicio"] = _fmt_data(data_ini_julg) or ""
+            dados["dados.dtJulgamentoFim"] = _fmt_data(data_fim_julg) or ""
+            dados["dados.dtRegistroInicio"] = _fmt_data(data_ini_reg) or ""
+            dados["dados.dtRegistroFim"] = _fmt_data(data_fim_reg) or ""
+            dados["secoesTreeSelection.values"] = secoes
+            dados["classesTreeSelection.values"] = classes
+            dados["assuntosTreeSelection.values"] = assuntos
+            dados["dados.pesquisarComSinonimos"] = "true"
+
             r = self._client.post(
                 f"{BASE_URL}/resultadoCompleta.do",
                 data=dados,
