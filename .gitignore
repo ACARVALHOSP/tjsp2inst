@@ -1,4 +1,6 @@
 .Rproj.user
+busca/__pycache__/
+busca/*.pyc
 .Rhistory
 .Rdata
 .httr-oauth
