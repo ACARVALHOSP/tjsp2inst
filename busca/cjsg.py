@@ -5,6 +5,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, Page
+from playwright_stealth import stealth_sync
 
 BASE_URL = "http://esaj.tjsp.jus.br/cjsg/resultadoCompleta.do"
 DELAY = 1.5
@@ -120,6 +121,8 @@ class CJSGClient:
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=self._headless)
         self._page = self._browser.new_page()
+        # esconde sinais de automação antes de carregar qualquer página
+        stealth_sync(self._page)
         self._page.goto(BASE_URL)
         # aguarda o form estar pronto
         self._page.wait_for_selector("form", timeout=10000)
