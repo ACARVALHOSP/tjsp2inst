@@ -48,28 +48,29 @@ class CJSGClient:
     def _get_recaptcha_token(self) -> str:
         try:
             from playwright.sync_api import sync_playwright
-            from playwright_stealth import stealth_sync
         except ImportError:
             return ""
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             try:
                 context = browser.new_context(
                     user_agent=HEADERS["User-Agent"],
                     locale="pt-BR",
                 )
                 page = context.new_page()
-                stealth_sync(page)
                 page.goto(
                     f"{BASE_URL}/resultadoCompleta.do",
-                    wait_until="domcontentloaded",
-                    timeout=30000,
+                    wait_until="networkidle",
+                    timeout=45000,
                 )
-                page.wait_for_function(
-                    "() => typeof window.grecaptcha !== 'undefined' && typeof window.grecaptcha.enterprise !== 'undefined'",
-                    timeout=20000,
+                # Give reCAPTCHA Enterprise scripts time to initialize
+                page.wait_for_timeout(3000)
+                has_enterprise = page.evaluate(
+                    "() => typeof window.grecaptcha !== 'undefined' && typeof window.grecaptcha.enterprise !== 'undefined'"
                 )
+                if not has_enterprise:
+                    return ""
                 token = page.evaluate(f"""
                     () => new Promise((resolve) => {{
                         grecaptcha.enterprise.ready(() => {{
