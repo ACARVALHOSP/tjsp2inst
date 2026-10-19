@@ -126,7 +126,8 @@ class CJSGClient:
             dados["dados.buscaInteiroTeor"] = livre
             dados["dados.dtJulgamentoInicio"] = _fmt_data(data_ini_julg) or ""
             dados["dados.dtJulgamentoFim"] = _fmt_data(data_fim_julg) or ""
-            dados["dados.pesquisarComSinonimos"] = "true"
+            dados["dados.pesquisarComSinonimos"] = "S"
+            dados["tipoDecisaoSelecionados"] = "A"
             # token vazio — funciona quando reCAPTCHA Enterprise está fora de cota
             dados["recaptcha_response_token"] = ""
 
