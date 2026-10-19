@@ -67,8 +67,8 @@ class CJSGClient:
                     timeout=30000,
                 )
                 page.wait_for_function(
-                    "() => typeof window.grecaptcha !== 'undefined'",
-                    timeout=15000,
+                    "() => typeof window.grecaptcha !== 'undefined' && typeof window.grecaptcha.enterprise !== 'undefined'",
+                    timeout=20000,
                 )
                 token = page.evaluate(f"""
                     () => new Promise((resolve) => {{
