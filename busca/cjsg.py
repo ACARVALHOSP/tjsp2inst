@@ -12,6 +12,7 @@ HEADERS = {
     "Accept-Language": "pt-BR,pt;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Referer": "http://esaj.tjsp.jus.br/cjsg/resultadoCompleta.do",
+    "Origin": "http://esaj.tjsp.jus.br",
 }
 DELAY = 1.5
 
