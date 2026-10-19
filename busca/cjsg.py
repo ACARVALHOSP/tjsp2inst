@@ -151,9 +151,8 @@ class CJSGClient:
             "--no-first-run",
             "--no-default-browser-check",
         ])
-        time.sleep(2)  # aguarda Chrome iniciar
+        time.sleep(2)
 
-        # conecta via CDP — sem reinjetar flags de automação
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
         context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
@@ -175,7 +174,7 @@ class CJSGClient:
         page = self._page
 
         if pagina == 1:
-            # usa seletor por name para evitar problemas com pontos no ID
+            # preenche os campos visíveis
             page.fill('[name="dados.buscaInteiroTeor"]', livre)
 
             if data_ini_julg:
@@ -183,9 +182,13 @@ class CJSGClient:
             if data_fim_julg:
                 page.fill('[name="dados.dtJulgamentoFim"]', _fmt_data(data_fim_julg))
 
-            # submete o form (o reCAPTCHA é resolvido automaticamente pelo browser)
-            page.click('[name="pbSubmit"]')
-            _aguardar_resultados(page)
+            print("\n" + "="*60)
+            print("O formulário foi preenchido no Chrome.")
+            print("Clique em 'Pesquisar' no browser e aguarde os resultados.")
+            print("Quando os resultados aparecerem, pressione ENTER aqui.")
+            print("="*60 + "\n")
+            input()
+            _aguardar_resultados(page, timeout=5000)
         else:
             # navega para a página N
             page.goto(
