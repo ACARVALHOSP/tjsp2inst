@@ -110,22 +110,52 @@ def _aguardar_resultados(page: Page, timeout: int = 15000):
         pass  # pode não ter resultados
 
 
+import os
+
+# caminho padrão do perfil do Chrome no Windows
+_CHROME_PROFILE_WIN = os.path.expandvars(
+    r"%LOCALAPPDATA%\Google\Chrome\User Data"
+)
+
+
 class CJSGClient:
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = False, chrome_profile: str | None = None):
+        """
+        headless: False recomendado para evitar bloqueio por reCAPTCHA.
+        chrome_profile: caminho para o User Data do Chrome. Se informado,
+            usa o perfil real do usuário (mais confiável com reCAPTCHA).
+            Padrão: tenta o perfil do Chrome no Windows automaticamente.
+        """
         self._headless = headless
+        self._chrome_profile = chrome_profile or (
+            _CHROME_PROFILE_WIN if os.path.exists(_CHROME_PROFILE_WIN) else None
+        )
         self._pw = None
-        self._browser = None
+        self._context = None
         self._page = None
 
     def _iniciar(self):
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self._headless)
-        self._page = self._browser.new_page()
-        # esconde sinais de automação antes de carregar qualquer página
-        stealth_sync(self._page)
+
+        if self._chrome_profile and os.path.exists(self._chrome_profile):
+            # usa o Chrome real com o perfil do usuário
+            # o Chrome precisa estar fechado antes de rodar
+            self._context = self._pw.chromium.launch_persistent_context(
+                user_data_dir=self._chrome_profile,
+                channel="chrome",
+                headless=self._headless,
+                args=["--profile-directory=Default"],
+            )
+            self._page = self._context.new_page()
+        else:
+            # fallback: Chromium com stealth
+            browser = self._pw.chromium.launch(headless=self._headless)
+            self._context = browser.new_context()
+            self._page = self._context.new_page()
+            stealth_sync(self._page)
+
         self._page.goto(BASE_URL)
-        # aguarda o form estar pronto
-        self._page.wait_for_selector("form", timeout=10000)
+        self._page.wait_for_selector("form", timeout=15000)
 
     def buscar(
         self,
@@ -188,8 +218,8 @@ class CJSGClient:
         return resultado
 
     def close(self):
-        if self._browser:
-            self._browser.close()
+        if self._context:
+            self._context.close()
         if self._pw:
             self._pw.stop()
 
