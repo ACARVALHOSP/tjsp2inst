@@ -137,16 +137,16 @@ class CJSGClient:
         page = self._page
 
         if pagina == 1:
-            # limpa e preenche busca livre
-            page.fill("#dados\\.buscaInteiroTeor", livre)
+            # usa seletor por name para evitar problemas com pontos no ID
+            page.fill('[name="dados.buscaInteiroTeor"]', livre)
 
             if data_ini_julg:
-                page.fill("#dados\\.dtJulgamentoInicio", _fmt_data(data_ini_julg))
+                page.fill('[name="dados.dtJulgamentoInicio"]', _fmt_data(data_ini_julg))
             if data_fim_julg:
-                page.fill("#dados\\.dtJulgamentoFim", _fmt_data(data_fim_julg))
+                page.fill('[name="dados.dtJulgamentoFim"]', _fmt_data(data_fim_julg))
 
             # submete o form (o reCAPTCHA é resolvido automaticamente pelo browser)
-            page.click("#pbSubmit")
+            page.click('[name="pbSubmit"]')
             _aguardar_resultados(page)
         else:
             # navega para a página N
