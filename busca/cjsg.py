@@ -7,6 +7,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 BASE_URL = "http://esaj.tjsp.jus.br/cjsg"
+RECAPTCHA_SITE_KEY = "6LcXJIAbAAAAAOwprTGEEYwRSe-HMYD-Ys0pSR6f"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
     "Accept-Language": "pt-BR,pt;q=0.9",
@@ -43,6 +44,45 @@ class CJSGClient:
     def __init__(self):
         self._client = httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30)
         self._form_base: dict = {}
+
+    def _get_recaptcha_token(self) -> str:
+        try:
+            from playwright.sync_api import sync_playwright
+            from playwright_stealth import stealth_sync
+        except ImportError:
+            return ""
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    locale="pt-BR",
+                )
+                page = context.new_page()
+                stealth_sync(page)
+                page.goto(
+                    f"{BASE_URL}/resultadoCompleta.do",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+                page.wait_for_function(
+                    "() => typeof window.grecaptcha !== 'undefined'",
+                    timeout=15000,
+                )
+                token = page.evaluate(f"""
+                    () => new Promise((resolve) => {{
+                        grecaptcha.enterprise.ready(() => {{
+                            grecaptcha.enterprise
+                                .execute('{RECAPTCHA_SITE_KEY}', {{action: 'consulta'}})
+                                .then(resolve)
+                                .catch(() => resolve(''));
+                        }});
+                    }})
+                """)
+                return token or ""
+            finally:
+                browser.close()
 
     def _abrir_sessao(self):
         r = self._client.get(f"{BASE_URL}/resultadoCompleta.do")
@@ -129,8 +169,7 @@ class CJSGClient:
             dados["dados.dtJulgamentoFim"] = _fmt_data(data_fim_julg) or ""
             dados["dados.pesquisarComSinonimos"] = "S"
             dados["tipoDecisaoSelecionados"] = "A"
-            # token vazio — funciona quando reCAPTCHA Enterprise está fora de cota
-            dados["recaptcha_response_token"] = ""
+            dados["recaptcha_response_token"] = self._get_recaptcha_token()
 
             r = self._client.post(f"{BASE_URL}/resultadoCompleta.do", data=dados)
         else:
