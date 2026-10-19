@@ -1,16 +1,12 @@
-import time
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import httpx
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, Page
 
-BASE_URL = "http://esaj.tjsp.jus.br/cjsg"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-    "Accept-Language": "pt-BR,pt;q=0.9",
-}
+BASE_URL = "http://esaj.tjsp.jus.br/cjsg/resultadoCompleta.do"
 DELAY = 1.5
 
 
@@ -36,133 +32,135 @@ class ResultadoBusca:
     acordaos: list[Acordao] = field(default_factory=list)
 
 
+def _n_total(soup: BeautifulSoup) -> int:
+    el = soup.select_one("#nomeAba-A")
+    if not el:
+        return 0
+    texto = re.sub(r"[^0-9]", "", el.text)
+    return int(texto) if texto else 0
+
+
+def _parse_pagina(html: str) -> list[Acordao]:
+    soup = BeautifulSoup(html, "html.parser")
+    acordaos = []
+
+    for item in soup.select(".fundocinza1"):
+        try:
+            cd_acordao = ""
+            n_processo = ""
+            link = item.select_one(".downloadEmenta")
+            if link:
+                n_processo = link.text.strip()
+                cd_acordao = link.get("cdacordao", "")
+
+            classe_assunto = ""
+            ca = item.select_one(".assuntoClasse")
+            if ca:
+                classe_assunto = ca.text.strip()
+
+            ementa = ""
+            ta = item.select_one("textarea")
+            if ta:
+                ementa = ta.text.strip()
+
+            campos = {}
+            for el in item.select(".ementaClass2"):
+                partes = el.text.split(":", 1)
+                if len(partes) == 2:
+                    chave = partes[0].strip().lower()
+                    chave = re.sub(r"\s+", "_", chave)
+                    chave = re.sub(r"[^a-z_]", "", chave)
+                    campos[chave] = partes[1].strip()
+
+            acordaos.append(Acordao(
+                cd_acordao=cd_acordao,
+                n_processo=n_processo,
+                classe_assunto=classe_assunto,
+                comarca=campos.get("comarca", ""),
+                orgao_julgador=campos.get("orgao_julgador", ""),
+                relator=campos.get("relatora", campos.get("relator", "")),
+                data_julgamento=campos.get("data_do_julgamento", ""),
+                data_registro=campos.get("data_de_registro", ""),
+                ementa=ementa,
+                outros_numeros=campos.get("outros_numeros", ""),
+            ))
+        except Exception:
+            continue
+
+    return acordaos
+
+
+def _fmt_data(d: Optional[str]) -> str:
+    """Converte YYYY-MM-DD para DD/MM/YYYY."""
+    if not d:
+        return ""
+    try:
+        ano, mes, dia = d.split("-")
+        return f"{dia}/{mes}/{ano}"
+    except ValueError:
+        return d
+
+
+def _aguardar_resultados(page: Page, timeout: int = 15000):
+    """Aguarda a página de resultados carregar."""
+    try:
+        page.wait_for_selector(".fundocinza1", timeout=timeout)
+    except Exception:
+        pass  # pode não ter resultados
+
+
 class CJSGClient:
-    def __init__(self):
-        self._client = httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30)
-        self._form_base: dict = {}
+    def __init__(self, headless: bool = True):
+        self._headless = headless
+        self._pw = None
+        self._browser = None
+        self._page = None
 
-    def _abrir_sessao(self):
-        """Abre sessão e lê todos os campos do formulário, incluindo hidden fields."""
-        r = self._client.get(f"{BASE_URL}/resultadoCompleta.do")
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        # coleta todos os campos do form (hidden fields incluídos)
-        form = soup.find("form")
-        self._form_base = {}
-        if form:
-            for inp in form.find_all(["input", "select", "textarea"]):
-                name = inp.get("name")
-                if not name:
-                    continue
-                value = inp.get("value", "")
-                self._form_base[name] = value
-
-        time.sleep(DELAY)
-
-    def _n_total(self, soup: BeautifulSoup) -> int:
-        el = soup.select_one("#nomeAba-A")
-        if not el:
-            return 0
-        texto = re.sub(r"[^0-9]", "", el.text)
-        return int(texto) if texto else 0
-
-    def _parse_pagina(self, html: str) -> list[Acordao]:
-        soup = BeautifulSoup(html, "html.parser")
-        acordaos = []
-
-        for item in soup.select(".fundocinza1"):
-            try:
-                cd_acordao = ""
-                n_processo = ""
-                link = item.select_one(".downloadEmenta")
-                if link:
-                    n_processo = link.text.strip()
-                    cd_acordao = link.get("cdacordao", "")
-
-                classe_assunto = ""
-                ca = item.select_one(".assuntoClasse")
-                if ca:
-                    classe_assunto = ca.text.strip()
-
-                ementa = ""
-                ta = item.select_one("textarea")
-                if ta:
-                    ementa = ta.text.strip()
-
-                campos = {}
-                for el in item.select(".ementaClass2"):
-                    partes = el.text.split(":", 1)
-                    if len(partes) == 2:
-                        chave = partes[0].strip().lower()
-                        chave = re.sub(r"\s+", "_", chave)
-                        chave = re.sub(r"[^a-z_]", "", chave)
-                        campos[chave] = partes[1].strip()
-
-                acordaos.append(Acordao(
-                    cd_acordao=cd_acordao,
-                    n_processo=n_processo,
-                    classe_assunto=classe_assunto,
-                    comarca=campos.get("comarca", ""),
-                    orgao_julgador=campos.get("orgao_julgador", ""),
-                    relator=campos.get("relatora", campos.get("relator", "")),
-                    data_julgamento=campos.get("data_do_julgamento", ""),
-                    data_registro=campos.get("data_de_registro", ""),
-                    ementa=ementa,
-                    outros_numeros=campos.get("outros_numeros", ""),
-                ))
-            except Exception:
-                continue
-
-        return acordaos
+    def _iniciar(self):
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=self._headless)
+        self._page = self._browser.new_page()
+        self._page.goto(BASE_URL)
+        # aguarda o form estar pronto
+        self._page.wait_for_selector("form", timeout=10000)
 
     def buscar(
         self,
         livre: str = "",
         data_ini_julg: Optional[str] = None,
         data_fim_julg: Optional[str] = None,
-        data_ini_reg: Optional[str] = None,
-        data_fim_reg: Optional[str] = None,
-        secoes: str = "",
-        classes: str = "",
-        assuntos: str = "",
         pagina: int = 1,
     ) -> ResultadoBusca:
-        """
-        Busca acórdãos no CJSG. Datas no formato YYYY-MM-DD.
-        """
-        if not self._form_base:
-            self._abrir_sessao()
+        if self._page is None:
+            self._iniciar()
+
+        page = self._page
 
         if pagina == 1:
-            # parte do form completo (com hidden fields) e sobrescreve só o que precisamos
-            dados = dict(self._form_base)
-            dados["dados.buscaInteiroTeor"] = livre
-            dados["dados.dtJulgamentoInicio"] = _fmt_data(data_ini_julg) or ""
-            dados["dados.dtJulgamentoFim"] = _fmt_data(data_fim_julg) or ""
-            dados["dados.dtRegistroInicio"] = _fmt_data(data_ini_reg) or ""
-            dados["dados.dtRegistroFim"] = _fmt_data(data_fim_reg) or ""
-            dados["secoesTreeSelection.values"] = secoes
-            dados["classesTreeSelection.values"] = classes
-            dados["assuntosTreeSelection.values"] = assuntos
-            dados["dados.pesquisarComSinonimos"] = "true"
+            # limpa e preenche busca livre
+            page.fill("#dados\\.buscaInteiroTeor", livre)
 
-            r = self._client.post(
-                f"{BASE_URL}/resultadoCompleta.do",
-                data=dados,
-            )
+            if data_ini_julg:
+                page.fill("#dados\\.dtJulgamentoInicio", _fmt_data(data_ini_julg))
+            if data_fim_julg:
+                page.fill("#dados\\.dtJulgamentoFim", _fmt_data(data_fim_julg))
+
+            # submete o form (o reCAPTCHA é resolvido automaticamente pelo browser)
+            page.click("#pbSubmit")
+            _aguardar_resultados(page)
         else:
-            time.sleep(DELAY)
-            r = self._client.get(
-                f"{BASE_URL}/trocaDePagina.do",
-                params={"tipoDeDecisao": "A", "pagina": pagina},
+            # navega para a página N
+            page.goto(
+                f"http://esaj.tjsp.jus.br/cjsg/trocaDePagina.do?tipoDeDecisao=A&pagina={pagina}"
             )
+            _aguardar_resultados(page)
 
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        total = self._n_total(soup)
+        time.sleep(DELAY)
+        html = page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        total = _n_total(soup)
         total_paginas = (total // 20) + (1 if total % 20 else 0)
-        acordaos = self._parse_pagina(r.text)
+        acordaos = _parse_pagina(html)
 
         return ResultadoBusca(
             total=total,
@@ -176,7 +174,6 @@ class CJSGClient:
         max_paginas: int = 5,
         **kwargs,
     ) -> ResultadoBusca:
-        """Busca e agrega múltiplas páginas."""
         resultado = self.buscar(pagina=1, **kwargs)
         limite = min(max_paginas, resultado.total_paginas)
 
@@ -188,21 +185,13 @@ class CJSGClient:
         return resultado
 
     def close(self):
-        self._client.close()
+        if self._browser:
+            self._browser.close()
+        if self._pw:
+            self._pw.stop()
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_):
         self.close()
-
-
-def _fmt_data(d: Optional[str]) -> Optional[str]:
-    """Converte YYYY-MM-DD para DD/MM/YYYY."""
-    if not d:
-        return None
-    try:
-        ano, mes, dia = d.split("-")
-        return f"{dia}/{mes}/{ano}"
-    except ValueError:
-        return d
