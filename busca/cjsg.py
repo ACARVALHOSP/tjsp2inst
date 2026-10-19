@@ -1,14 +1,18 @@
+import os
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, Page
-from playwright_stealth import stealth_sync
 
 BASE_URL = "http://esaj.tjsp.jus.br/cjsg/resultadoCompleta.do"
 DELAY = 1.5
+CDP_PORT = 9222
+CHROME_WIN = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+CHROME_WIN_X86 = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 
 
 @dataclass
@@ -110,49 +114,50 @@ def _aguardar_resultados(page: Page, timeout: int = 15000):
         pass  # pode não ter resultados
 
 
-import os
-
-# caminho padrão do perfil do Chrome no Windows
-_CHROME_PROFILE_WIN = os.path.expandvars(
-    r"%LOCALAPPDATA%\Google\Chrome\User Data"
-)
+def _chrome_exe() -> str:
+    for path in [CHROME_WIN, CHROME_WIN_X86]:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError("Chrome não encontrado. Informe o caminho via chrome_exe=")
 
 
 class CJSGClient:
-    def __init__(self, headless: bool = False, chrome_profile: str | None = None):
+    def __init__(self, chrome_exe: str | None = None, user_data_dir: str | None = None):
         """
-        headless: False recomendado para evitar bloqueio por reCAPTCHA.
-        chrome_profile: caminho para o User Data do Chrome. Se informado,
-            usa o perfil real do usuário (mais confiável com reCAPTCHA).
-            Padrão: tenta o perfil do Chrome no Windows automaticamente.
+        Lança o Chrome real sem o flag --enable-automation, que é detectado
+        pelo reCAPTCHA. O Playwright conecta ao Chrome via CDP.
+
+        chrome_exe: caminho para o chrome.exe (detectado automaticamente no Windows).
+        user_data_dir: pasta de perfil temporária. Um perfil novo é criado em
+            %TEMP%\\chrome-tjsp se não for informado.
         """
-        self._headless = headless
-        self._chrome_profile = chrome_profile or (
-            _CHROME_PROFILE_WIN if os.path.exists(_CHROME_PROFILE_WIN) else None
+        self._chrome_exe = chrome_exe or _chrome_exe()
+        self._user_data_dir = user_data_dir or os.path.join(
+            os.environ.get("TEMP", "/tmp"), "chrome-tjsp"
         )
+        self._proc: subprocess.Popen | None = None
         self._pw = None
-        self._context = None
+        self._browser = None
         self._page = None
 
     def _iniciar(self):
-        self._pw = sync_playwright().start()
+        os.makedirs(self._user_data_dir, exist_ok=True)
 
-        if self._chrome_profile and os.path.exists(self._chrome_profile):
-            # usa o Chrome real com o perfil do usuário
-            # o Chrome precisa estar fechado antes de rodar
-            self._context = self._pw.chromium.launch_persistent_context(
-                user_data_dir=self._chrome_profile,
-                channel="chrome",
-                headless=self._headless,
-                args=["--profile-directory=Default"],
-            )
-            self._page = self._context.new_page()
-        else:
-            # fallback: Chromium com stealth
-            browser = self._pw.chromium.launch(headless=self._headless)
-            self._context = browser.new_context()
-            self._page = self._context.new_page()
-            stealth_sync(self._page)
+        # lança Chrome sem --enable-automation
+        self._proc = subprocess.Popen([
+            self._chrome_exe,
+            f"--remote-debugging-port={CDP_PORT}",
+            f"--user-data-dir={self._user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ])
+        time.sleep(2)  # aguarda Chrome iniciar
+
+        # conecta via CDP — sem reinjetar flags de automação
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
+        context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+        self._page = context.new_page() if not context.pages else context.pages[0]
 
         self._page.goto(BASE_URL)
         self._page.wait_for_selector("form", timeout=15000)
@@ -218,10 +223,12 @@ class CJSGClient:
         return resultado
 
     def close(self):
-        if self._context:
-            self._context.close()
+        if self._browser:
+            self._browser.close()
         if self._pw:
             self._pw.stop()
+        if self._proc:
+            self._proc.terminate()
 
     def __enter__(self):
         return self
